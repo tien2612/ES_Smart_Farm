@@ -1,70 +1,21 @@
-/*
- * HTTPS GET Example using plain Mbed TLS sockets
- *
- * Contacts the howsmyssl.com API via TLS v1.2 and reads a JSON
- * response.
- *
- * Adapted from the ssl_client1 example in Mbed TLS.
- *
- * SPDX-FileCopyrightText: The Mbed TLS Contributors
- *
- * SPDX-License-Identifier: Apache-2.0
- *
- * SPDX-FileContributor: 2015-2022 Espressif Systems (Shanghai) CO LTD
- */
+#include "https_request.h"
 
-#include <string.h>
-#include <stdlib.h>
-#include <inttypes.h>
-#include <time.h>
-#include <sys/time.h>
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
-#include "freertos/event_groups.h"
-#include "esp_wifi.h"
-#include "esp_event.h"
-#include "esp_log.h"
-#include "esp_system.h"
-#include "esp_timer.h"
-#include "nvs_flash.h"
-#include "nvs.h"
-#include "protocol_examples_common.h"
-#include "esp_sntp.h"
-#include "esp_netif.h"
+/* HTTPS task handler */
 
-#include "lwip/err.h"
-#include "lwip/sockets.h"
-#include "lwip/sys.h"
-#include "lwip/netdb.h"
-#include "lwip/dns.h"
-
-#include "esp_tls.h"
-#include "sdkconfig.h"
-#if CONFIG_MBEDTLS_CERTIFICATE_BUNDLE
-#include "esp_crt_bundle.h"
-#endif
-#include "time_sync.h"
-#include "wifi/wifi.h"
-
-/* Constants that aren't configurable in menuconfig */
-#define WEB_SERVER "backend-smartfarm-api.onrender.com"
-#define WEB_PORT "443"
-#define WEB_URL "https://es-backend-server.onrender.com/data" //patch
-#define GET_WEB_URL "https://backend-smartfarm-api.onrender.com/sensor" //get
-
-#define SERVER_URL_MAX_SZ 256
+TaskHandle_t get_task_handler = NULL;
+TaskHandle_t patch_task_handler = NULL;
 
 static const char *TAG = "example";
 
 /* Timer interval once every day (24 Hours) */
 #define TIME_PERIOD (86400000000ULL)
 
-static const char HOWSMYSSL_REQUEST[] = "GET " GET_WEB_URL " HTTP/1.1\r\n"
+static const char GET_REQUEST[] = "GET " GET_WEB_URL " HTTP/1.1\r\n"
                              "Host: "WEB_SERVER"\r\n"
                              "User-Agent: esp-idf/1.0 esp32\r\n"
                              "\r\n";
 
-static const char *PATCH_DATA = "{\"temperature\": 25, \"humidity\": 2, \"light\": 23}";
+static const char *PATCH_DATA = "{\"temperature\": 23, \"humidity\": 60}";
 
 static const char *PATCH_REQUEST_TEMPLATE =
                     "PATCH " WEB_URL " HTTP/1.1\r\n"
@@ -221,13 +172,7 @@ static void https_patch_request(esp_tls_cfg_t cfg, const char *WEB_SERVER_URL, c
 
         int content_length = snprintf(NULL, 0, PATCH_DATA);
         char patch_request[512];
-        snprintf(patch_request, sizeof(patch_request), "PATCH " WEB_URL " HTTP/1.1\r\n"
-                    "Host: "WEB_SERVER"\r\n"
-                    "User-Agent: esp-idf/1.0 esp32\r\n"
-                    "Content-Type: application/json\r\n"
-                    "Content-Length: %d\r\n"
-                    "\r\n"
-                    "%s", content_length, PATCH_DATA);
+        snprintf(patch_request, sizeof(patch_request), PATCH_REQUEST_TEMPLATE, content_length, PATCH_DATA);
 
         ESP_LOGE(TAG, "%s", patch_request);
 
@@ -291,7 +236,10 @@ static void https_patch_request(esp_tls_cfg_t cfg, const char *WEB_SERVER_URL, c
     exit:
         // No need for the countdown loop and delay here
         // vTaskDelay(1000 / portTICK_PERIOD_MS);
-    }
+
+        ESP_LOGI(TAG, "Before vTaskSuspend");
+        vTaskSuspend(patch_task_handler);
+        ESP_LOGI(TAG, "After vTaskSuspend");    }
 }
 
 #if CONFIG_MBEDTLS_CERTIFICATE_BUNDLE
@@ -301,7 +249,7 @@ static void https_get_request_using_crt_bundle(void)
     esp_tls_cfg_t cfg = {
         .crt_bundle_attach = esp_crt_bundle_attach,
     };
-    https_get_request(cfg, GET_WEB_URL, HOWSMYSSL_REQUEST);
+    https_get_request(cfg, GET_WEB_URL, GET_REQUEST);
 }
 
 static void https_patch_request_using_crt_bundle(void)
@@ -322,7 +270,7 @@ static void https_get_request_using_cacert_buf(void)
         .cacert_buf = (const unsigned char *) server_root_cert_pem_start,
         .cacert_bytes = server_root_cert_pem_end - server_root_cert_pem_start,
     };
-    https_get_request(cfg, GET_WEB_URL, HOWSMYSSL_REQUEST);
+    https_get_request(cfg, GET_WEB_URL, GET_REQUEST);
 }
 
 static void https_patch_request_using_cacert_buf(void)
@@ -347,7 +295,7 @@ static void https_get_request_using_global_ca_store(void)
     esp_tls_cfg_t cfg = {
         .use_global_ca_store = true,
     };
-    https_get_request(cfg, GET_WEB_URL, HOWSMYSSL_REQUEST);
+    https_get_request(cfg, GET_WEB_URL, GET_REQUEST);
     esp_tls_free_global_ca_store();
 }
 
@@ -405,7 +353,7 @@ static void https_get_request_using_already_saved_session(const char *url)
 }
 #endif
 
-static void https_request_task(void *pvparameters)
+void https_request_task(void *pvparameters)
 {
     ESP_LOGI(TAG, "Start https_request example");
 
@@ -443,10 +391,9 @@ static void https_request_task(void *pvparameters)
     https_get_request_using_cacert_buf();
     https_get_request_using_global_ca_store();
     ESP_LOGI(TAG, "Get again https_request example");
-
 }
 
-static void https_patch_task(void *pvparameters)
+void https_patch_task(void *pvparameters)
 {
     ESP_LOGI(TAG, "Start patch request task");
 
@@ -484,21 +431,5 @@ static void https_patch_task(void *pvparameters)
     https_patch_request_using_cacert_buf();
     https_patch_request_using_global_ca_store();
     ESP_LOGI(TAG, "patch again https_request example");
-
-}
-void app_main(void)
-{
-    //Initialize NVS
-    esp_err_t ret = nvs_flash_init();
-    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-      ESP_ERROR_CHECK(nvs_flash_erase());
-      ret = nvs_flash_init();
-    }
-    ESP_ERROR_CHECK(ret);
-
-    wifi_init_sta();
-
-    xTaskCreate(&https_request_task, "https_get_task", 8192, NULL, 5, NULL);
-    xTaskCreate(&https_patch_task, "https_patch_task", 8192, NULL, 5, NULL);
 
 }
