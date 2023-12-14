@@ -35,17 +35,41 @@
 /* Constants that aren't configurable in menuconfig */
 #define WEB_SERVER "backend-smartfarm-api.onrender.com"
 #define WEB_PORT "443" // https port
-#define WEB_URL "https://backend-smartfarm-api.onrender.com/sensor/1" //patch
-#define GET_WEB_URL "https://backend-smartfarm-api.onrender.com/sensor/1" //get
+#define WEB_URL_LIGHT "https://backend-smartfarm-api.onrender.com/sensor/light" //patch
+#define WEB_URL_SOIL_MOIS "https://backend-smartfarm-api.onrender.com/sensor/soil_moisture" //patch
+#define WEB_URL_DHT20 "https://backend-smartfarm-api.onrender.com/sensor/dht20" //patch
+
+#define GET_WEB_URL_LIGHT "https://backend-smartfarm-api.onrender.com/sensor/light" //patch
+#define GET_WEB_URL_SOIL_MOIS "https://backend-smartfarm-api.onrender.com/sensor/soil_moisture" //patch
+#define GET_WEB_URL_DHT20 "https://backend-smartfarm-api.onrender.com/sensor/dht20" //patch
 
 #define SERVER_URL_MAX_SZ 256
 
+typedef struct {
+    char sensorId[20];
+    char temp[3];
+    char humi[3];
+    char crc[20];
+} DHT20_Data;
+
+typedef struct {
+    char sensorId[20];
+    char sensorData[3];
+    char crc[20];
+} Others_Data;
+
+#define SENSOR_DHT20 "dht20"
+#define SENSOR_SOIL_MOISTURE "soil_moisture"
+#define SENSOR_LIGHT "light"
+
+
 extern TaskHandle_t get_task_handler;
 extern TaskHandle_t patch_task_handler;
+extern TaskHandle_t rx_task_handler;
 
 extern void https_request_task(void *pvparameters);
 
-extern void https_patch_task(void *pvparameters);
+extern void https_patch_task(uint8_t *data);
 
 
 #endif

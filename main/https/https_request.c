@@ -4,21 +4,24 @@
 
 TaskHandle_t get_task_handler = NULL;
 TaskHandle_t patch_task_handler = NULL;
+TaskHandle_t rx_task_handler = NULL;
 
 static const char *TAG = "example";
 
 /* Timer interval once every day (24 Hours) */
 #define TIME_PERIOD (86400000000ULL)
 
-static const char GET_REQUEST[] = "GET " GET_WEB_URL " HTTP/1.1\r\n"
+static const char GET_REQUEST[] = "GET " GET_WEB_URL_DHT20 " HTTP/1.1\r\n"
                              "Host: "WEB_SERVER"\r\n"
                              "User-Agent: esp-idf/1.0 esp32\r\n"
                              "\r\n";
 
-static const char *PATCH_DATA = "{\"temperature\": 23, \"humidity\": 60}";
+static const char *PATCH_DATA_DHT20 = "{\"temperature\": %.6f, \"humidity\": %.6f}";
+static const char *PATCH_DATA_LIGHT = "{\"light\": %.6f}";
+static const char *PATCH_DATA_SOIL_MOIS = "{\"soil_moisture\": %.6f}";
 
-static const char *PATCH_REQUEST_TEMPLATE =
-                    "PATCH " WEB_URL " HTTP/1.1\r\n"
+static char *PATCH_REQUEST_DHT20 =
+                    "PATCH " WEB_URL_DHT20 " HTTP/1.1\r\n"
                     "Host: "WEB_SERVER"\r\n"
                     "User-Agent: esp-idf/1.0 esp32\r\n"
                     "Content-Type: application/json\r\n"
@@ -26,12 +29,31 @@ static const char *PATCH_REQUEST_TEMPLATE =
                     "\r\n"
                     "%s";
 
+static char *PATCH_REQUEST_LIGHT_SENSOR =
+                    "PATCH " WEB_URL_LIGHT " HTTP/1.1\r\n"
+                    "Host: "WEB_SERVER"\r\n"
+                    "User-Agent: esp-idf/1.0 esp32\r\n"
+                    "Content-Type: application/json\r\n"
+                    "Content-Length: %d\r\n"
+                    "\r\n"
+                    "%s";
+
+static char *PATCH_REQUEST_SOIL_MOIS_SENSOR =
+                    "PATCH " WEB_URL_SOIL_MOIS " HTTP/1.1\r\n"
+                    "Host: "WEB_SERVER"\r\n"
+                    "User-Agent: esp-idf/1.0 esp32\r\n"
+                    "Content-Type: application/json\r\n"
+                    "Content-Length: %d\r\n"
+                    "\r\n"
+                    "%s";
 #ifdef CONFIG_EXAMPLE_CLIENT_SESSION_TICKETS
 static const char LOCAL_SRV_REQUEST[] = "GET " CONFIG_EXAMPLE_LOCAL_SERVER_URL " HTTP/1.1\r\n"
                              "Host: "WEB_SERVER"\r\n"
                              "User-Agent: esp-idf/1.0 esp32\r\n"
                              "\r\n";
 #endif
+
+static char patchPayload[128];
 
 /* Root cert for howsmyssl.com, taken from server_root_cert.pem
 
@@ -136,13 +158,70 @@ static void https_get_request(esp_tls_cfg_t cfg, const char *WEB_SERVER_URL, con
     }
 }
 
-static void https_patch_request(esp_tls_cfg_t cfg, const char *WEB_SERVER_URL, const char *PATCH_DATA)
+static void https_patch_request(esp_tls_cfg_t cfg, const char *WEB_SERVER_URL, const char *PATCH_DATA, uint8_t* data)
 {
     while (1)
     {
+        memset(patchPayload, 0x00, sizeof(patchPayload));
+        int content_length = snprintf(NULL, 0, patchPayload);
+        char patch_request[512];
+
+        ESP_LOGI(TAG, "Received Data Frame:");
+
+        if (data[0] == (char)'d') {
+            DHT20_Data *receivedFrame = (DHT20_Data *)(data); 
+
+            ESP_LOGI(TAG, "Sensor ID: %s", receivedFrame->sensorId);
+            ESP_LOGI(TAG, "Sensor temp: %s", receivedFrame->temp);
+            ESP_LOGI(TAG, "Sensor humi: %s", receivedFrame->humi);
+            ESP_LOGI(TAG, "CRC: %s", receivedFrame->crc);
+
+            if (strcmp(receivedFrame->sensorId, SENSOR_DHT20) == 0) 
+            {
+                snprintf(patchPayload, sizeof(patchPayload), PATCH_DATA_DHT20,
+                    atof(receivedFrame->temp), atof(receivedFrame->humi) ); 
+                
+                content_length = strlen(patchPayload);
+                snprintf(patch_request, sizeof(patch_request), PATCH_REQUEST_DHT20, content_length, patchPayload);
+            } 
+
+        }
+        else {
+            Others_Data *receivedFrame = (Others_Data *)(data);  
+
+            ESP_LOGI(TAG, "Sensor ID: %s", receivedFrame->sensorId);
+            ESP_LOGI(TAG, "Sensor Data: %s", receivedFrame->sensorData);
+            ESP_LOGI(TAG, "CRC: %s", receivedFrame->crc);
+
+            if (strcmp(receivedFrame->sensorId, SENSOR_LIGHT) == 0) 
+            {
+                snprintf(patchPayload, sizeof(patchPayload), PATCH_DATA_LIGHT,
+                    atof(receivedFrame->sensorData)); 
+
+                content_length = strlen(patchPayload);
+                snprintf(patch_request, sizeof(patch_request), PATCH_REQUEST_LIGHT_SENSOR, content_length, patchPayload);
+
+            } 
+            else if (strcmp(receivedFrame->sensorId, SENSOR_SOIL_MOISTURE) == 0) 
+            {            
+                snprintf(patchPayload, sizeof(patchPayload), PATCH_DATA_SOIL_MOIS,
+                    atof(receivedFrame->sensorData)); 
+
+                content_length = strlen(patchPayload);
+                snprintf(patch_request, sizeof(patch_request), PATCH_REQUEST_SOIL_MOIS_SENSOR, content_length, patchPayload);
+
+            }
+        } 
+
+
         char buf[512];
         int ret, len;
         ESP_LOGI(TAG, "This is patch request !");
+
+        ESP_LOGE(TAG, "payload %s!", patchPayload);
+
+        ESP_LOGE(TAG, "patch request %s!", patch_request);
+
 
         esp_tls_t *tls = esp_tls_init();
         if (!tls)
@@ -170,10 +249,6 @@ static void https_patch_request(esp_tls_cfg_t cfg, const char *WEB_SERVER_URL, c
         }
 #endif
 
-        int content_length = snprintf(NULL, 0, PATCH_DATA);
-        char patch_request[512];
-        snprintf(patch_request, sizeof(patch_request), PATCH_REQUEST_TEMPLATE, content_length, PATCH_DATA);
-
         ESP_LOGE(TAG, "%s", patch_request);
 
 
@@ -196,6 +271,8 @@ static void https_patch_request(esp_tls_cfg_t cfg, const char *WEB_SERVER_URL, c
             }
         } while (written_bytes < strlen(patch_request));
 
+        goto cleanup;
+        
         /* Reading http response */
         ESP_LOGI(TAG, "Reading HTTP response...");
 
@@ -233,13 +310,11 @@ static void https_patch_request(esp_tls_cfg_t cfg, const char *WEB_SERVER_URL, c
     cleanup:
         // free(patch_request);  // Free allocated memory
         esp_tls_conn_destroy(tls);
+        xTaskNotifyGive(rx_task_handler);
+        break;
     exit:
-        // No need for the countdown loop and delay here
-        // vTaskDelay(1000 / portTICK_PERIOD_MS);
-
-        ESP_LOGI(TAG, "Before vTaskSuspend");
-        vTaskSuspend(patch_task_handler);
-        ESP_LOGI(TAG, "After vTaskSuspend");    }
+        xTaskNotifyGive(rx_task_handler);
+    }
 }
 
 #if CONFIG_MBEDTLS_CERTIFICATE_BUNDLE
@@ -249,16 +324,16 @@ static void https_get_request_using_crt_bundle(void)
     esp_tls_cfg_t cfg = {
         .crt_bundle_attach = esp_crt_bundle_attach,
     };
-    https_get_request(cfg, GET_WEB_URL, GET_REQUEST);
+    https_get_request(cfg, GET_WEB_URL_DHT20, GET_REQUEST);
 }
 
-static void https_patch_request_using_crt_bundle(void)
+static void https_patch_request_using_crt_bundle(uint8_t* data)
 {
     ESP_LOGI(TAG, "https_request using crt bundle");
     esp_tls_cfg_t cfg = {
         .crt_bundle_attach = esp_crt_bundle_attach,
     };
-    https_patch_request(cfg, WEB_URL, PATCH_DATA);
+    https_patch_request(cfg, WEB_URL_DHT20, PATCH_DATA_DHT20, data);
 }
 
 #endif // CONFIG_MBEDTLS_CERTIFICATE_BUNDLE
@@ -270,20 +345,20 @@ static void https_get_request_using_cacert_buf(void)
         .cacert_buf = (const unsigned char *) server_root_cert_pem_start,
         .cacert_bytes = server_root_cert_pem_end - server_root_cert_pem_start,
     };
-    https_get_request(cfg, GET_WEB_URL, GET_REQUEST);
+    https_get_request(cfg, GET_WEB_URL_DHT20, GET_REQUEST);
 }
 
-static void https_patch_request_using_cacert_buf(void)
+static void https_patch_request_using_cacert_buf(uint8_t* data)
 {
     ESP_LOGI(TAG, "https_request using cacert_buf");
     esp_tls_cfg_t cfg = {
         .cacert_buf = (const unsigned char *) server_root_cert_pem_start,
         .cacert_bytes = server_root_cert_pem_end - server_root_cert_pem_start,
     };
-    https_patch_request(cfg, WEB_URL, PATCH_DATA);
+    https_patch_request(cfg, WEB_URL_DHT20, PATCH_DATA_DHT20, data);
 }
 
-static void https_get_request_using_global_ca_store(void)
+static void https_get_request_using_global_ca_store()
 {
     esp_err_t esp_ret = ESP_FAIL;
     ESP_LOGI(TAG, "https_request using global ca_store");
@@ -295,11 +370,11 @@ static void https_get_request_using_global_ca_store(void)
     esp_tls_cfg_t cfg = {
         .use_global_ca_store = true,
     };
-    https_get_request(cfg, GET_WEB_URL, GET_REQUEST);
+    https_get_request(cfg, GET_WEB_URL_DHT20, GET_REQUEST);
     esp_tls_free_global_ca_store();
 }
 
-static void https_patch_request_using_global_ca_store(void)
+static void https_patch_request_using_global_ca_store(uint8_t* data)
 {
     esp_err_t esp_ret = ESP_FAIL;
     ESP_LOGI(TAG, "https_request using global ca_store");
@@ -311,7 +386,7 @@ static void https_patch_request_using_global_ca_store(void)
     esp_tls_cfg_t cfg = {
         .use_global_ca_store = true,
     };
-    https_patch_request(cfg, WEB_URL, PATCH_DATA);
+    https_patch_request(cfg, WEB_URL_DHT20, PATCH_DATA_DHT20, data);
     esp_tls_free_global_ca_store();
 }
 
@@ -390,10 +465,10 @@ void https_request_task(void *pvparameters)
     ESP_LOGI(TAG, "Minimum free heap size: %" PRIu32 " bytes", esp_get_minimum_free_heap_size());
     https_get_request_using_cacert_buf();
     https_get_request_using_global_ca_store();
-    ESP_LOGI(TAG, "Get again https_request example");
+    ESP_LOGI(TAG, "Get again https_request");
 }
 
-void https_patch_task(void *pvparameters)
+void https_patch_task(uint8_t *data)
 {
     ESP_LOGI(TAG, "Start patch request task");
 
@@ -422,14 +497,13 @@ void https_patch_task(void *pvparameters)
     #if CONFIG_MBEDTLS_CERTIFICATE_BUNDLE
         ESP_LOGI(TAG, "first");
 
-        https_patch_request_using_crt_bundle();
+        https_patch_request_using_crt_bundle(data);
 
         ESP_LOGI(TAG, "after");
 
     #endif
     ESP_LOGI(TAG, "Minimum free heap size: %" PRIu32 " bytes", esp_get_minimum_free_heap_size());
-    https_patch_request_using_cacert_buf();
-    https_patch_request_using_global_ca_store();
-    ESP_LOGI(TAG, "patch again https_request example");
-
+    https_patch_request_using_cacert_buf(data);
+    https_patch_request_using_global_ca_store(data);
+    ESP_LOGI(TAG, "patch again https_request");
 }
