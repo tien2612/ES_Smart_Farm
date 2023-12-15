@@ -49,16 +49,19 @@ void loop()
       Serial.write('<'); // Start of frame
       Serial.write((const char *)dht20_data, _size);
       Serial.write('#');  // end of frame
+      status = LIGHT_SENSOR;
       break;
     case LIGHT_SENSOR:
         Serial.write('<'); 
         Serial.write((const char *)light_sensor_data, _size);
         Serial.write('#');  // end of frame
+        status = SOIL_MOIS;
         break;
     case SOIL_MOIS:
         Serial.write('<'); // Start of frame
         Serial.write((const char *)soil_mois_data, _size);
         Serial.write('#');  // end of frame      
+        status = DHT20;
         break;
     default:
       break;
