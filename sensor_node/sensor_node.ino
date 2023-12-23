@@ -1,71 +1,89 @@
-#pragma pack(push, 1)
+#include <Arduino_FreeRTOS.h>
+#include "crc.h"
+#include "sensor_data.h"
+#include <semphr.h>
+#include "MemoryFree.h"
+#include "pgmStrToRAM.h"
 
-struct dht20
-{
-    char sensorId[20];
-    char temp[3];
-    char humi[3];
-    char crc[20];
-};
+TaskHandle_t light_task_handler;
+TaskHandle_t soil_mois_task_handler;
+TaskHandle_t dht20_task_handler;
 
-#pragma pack(pop)
+SemaphoreHandle_t xMutex = xSemaphoreCreateMutex();
 
-#pragma pack(push, 1)
+void sendDHT20Task(void *pvParameters) {
+    (void)pvParameters;
 
-struct other_sensor
-{
-    char sensorId[20];
-    char sensorData[3];
-    char crc[20];
-};
+    for (;;) {
+        if (xSemaphoreTake(xMutex, portMAX_DELAY) == pdTRUE) {
+            // Access the shared UART
+            // Send the struct over UART
+            construct_DHT20_Frame(20, 50);
+            // Release the mutex
+            xSemaphoreGive(xMutex);
 
-#pragma pack(pop)
+            vTaskDelay(pdMS_TO_TICKS(DHT20_TASK_SEND_TIME));
+        }
 
-#define SEND_TIME         10000
-#define DHT20             10
-#define LIGHT_SENSOR      11
-#define SOIL_MOIS         12
-
-int size_dht20_struct = sizeof(struct dht20);
-int size_other_struct = sizeof(struct other_sensor);
-
-struct dht20 dht20_data = {"light", "15", "23", "0x123123"};
-struct other_sensor light_sensor_data = {"light", "31", "0x1234123"};
-struct other_sensor soil_mois_data = {"soil_moistuser", "31", "0x1234123"};
-
-int status = DHT20;
-
-void setup()
-{
-    Serial.begin(115200);
-    status = DHT20;
+        Serial.println(freeMemory());  // print how much RAM is available in bytes.
+    }
 }
 
-void loop()
-{
-    switch (status) {
-        case DHT20:
-            Serial.write('<'); // Start of frame
-            Serial.write((const char *)&dht20_data, size_dht20_struct);
-            Serial.write('#');  // end of frame
-            status = LIGHT_SENSOR;
-            break;
-        case LIGHT_SENSOR:
-            Serial.write('<');
-            Serial.write((const char *)&light_sensor_data, size_other_struct);
-            Serial.write('#');  // end of frame
-            status = SOIL_MOIS;
-            break;
-        case SOIL_MOIS:
-            Serial.write('<'); // Start of frame
-            Serial.write((const char *)&soil_mois_data, size_other_struct);
-            Serial.write('#');  // end of frame
-            status = DHT20;
-            break;
-        default:
-            break;
-    }
+void sendSoilMoistureTask(void *pvParameters) {
+    (void)pvParameters;
 
-    Serial.println();
-    delay(SEND_TIME);
+    for (;;) {
+        if (xSemaphoreTake(xMutex, portMAX_DELAY) == pdPASS) {
+            // Access the shared UART
+            // Send the struct over UART
+            construct_SoilMoisture_Frame(55);
+            // Release the mutex
+            xSemaphoreGive(xMutex);
+
+            vTaskDelay(pdMS_TO_TICKS(SOIL_MOISTURE_TASK_SEND_TIME));
+        }
+
+        Serial.println(freeMemory());  // print how much RAM is available in bytes.
+
+    }
+}
+
+void sendLightTask(void *pvParameters) {
+    (void)pvParameters;
+
+    for (;;) {
+
+        if (xSemaphoreTake(xMutex, portMAX_DELAY) == pdTRUE) {
+            // Access the shared UART
+            // Send the struct over UART
+            construct_LightSensor_Frame(30);
+            // Release the mutex
+            xSemaphoreGive(xMutex);
+
+            vTaskDelay(pdMS_TO_TICKS(LIGHT_TASK_SEND_TIME));
+        }
+
+        Serial.println(freeMemory());  // print how much RAM is available in bytes.
+
+    }
+}
+
+void setup() {
+    Serial.begin(115200);
+    // dht.begin();
+
+    // Create a FreeRTOS task for sending data
+    xTaskCreate(sendDHT20Task, "Send DHT22", 512, NULL, 1, NULL);
+    xTaskCreate(sendSoilMoistureTask, "Send Moistuser", 100, NULL, 1, &soil_mois_task_handler);
+    xTaskCreate(sendLightTask, "Send light data", 200, NULL, 1, &light_task_handler);
+
+    Serial.println(getPSTR("Old way to force String to Flash")); // forced to be compiled into and read 	
+    Serial.println(F("New way to force String to Flash")); // forced to be compiled into and read 	
+    Serial.println(F("Free RAM = ")); //F function does the same and is now a built in library, in IDE > 1.0.0
+    Serial.println(freeMemory());  // print how much RAM is available in bytes.
+    // // Start the FreeRTOS scheduler
+    vTaskStartScheduler();
+}
+
+void loop() {
 }
