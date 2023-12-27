@@ -55,7 +55,7 @@ static const int RX_BUF_SIZE = 1024;
 
 #define TXD_PIN (GPIO_NUM_17)
 #define RXD_PIN (GPIO_NUM_16)
-#define START_MARKER '<'
+#define START_MARKER '!'
 
 // typedef struct {
 //     char sensorData[3];
@@ -200,6 +200,7 @@ static void rx_task(void *arg)
                 } else {
                     // No data received, handle accordingly
                     ESP_LOGI(RX_TASK_TAG, "No data");
+                    break;
                 }
             }
             // Process the received frame between start and end markers
