@@ -4,6 +4,19 @@
 #include <semphr.h>
 #include "MemoryFree.h"
 #include "pgmStrToRAM.h"
+#include "DHT.h"   
+const int DHTPIN = 4;      
+const int DHTTYPE = DHT22;  
+
+const int SOILPIN = A0;
+const int LIGHTPIN = A1;
+
+DHT dht(DHTPIN, DHTTYPE);
+
+int temp = 0.0f;
+int humi = 0.0f;
+int light = 0.0f;
+int soil = 0.0f;
 
 TaskHandle_t light_task_handler;
 TaskHandle_t soil_mois_task_handler;
@@ -18,7 +31,9 @@ void sendDHT20Task(void *pvParameters) {
         if (xSemaphoreTake(xMutex, portMAX_DELAY) == pdTRUE) {
             // Access the shared UART
             // Send the struct over UART
-            construct_DHT20_Frame(20, 50);
+            temp = dht.readTemperature(); 
+            humi = dht.readHumidity();
+            construct_DHT20_Frame(temp, humi);
             // Release the mutex
             xSemaphoreGive(xMutex);
 
@@ -36,7 +51,9 @@ void sendSoilMoistureTask(void *pvParameters) {
         if (xSemaphoreTake(xMutex, portMAX_DELAY) == pdPASS) {
             // Access the shared UART
             // Send the struct over UART
-            construct_SoilMoisture_Frame(55);
+            int value = analogRead(SOILPIN);
+            soil = map(value, 0, 1023, 0, 100);
+            construct_SoilMoisture_Frame(soil);
             // Release the mutex
             xSemaphoreGive(xMutex);
 
@@ -56,7 +73,9 @@ void sendLightTask(void *pvParameters) {
         if (xSemaphoreTake(xMutex, portMAX_DELAY) == pdTRUE) {
             // Access the shared UART
             // Send the struct over UART
-            construct_LightSensor_Frame(30);
+            int value = analogRead(LIGHTPIN);
+            light = map(value, 0, 1023, 0, 100);
+            construct_LightSensor_Frame(light);
             // Release the mutex
             xSemaphoreGive(xMutex);
 
@@ -70,7 +89,7 @@ void sendLightTask(void *pvParameters) {
 
 void setup() {
     Serial.begin(115200);
-    // dht.begin();
+    dht.begin();
 
     // Create a FreeRTOS task for sending data
     xTaskCreate(sendDHT20Task, "Send DHT22", 512, NULL, 1, NULL);
