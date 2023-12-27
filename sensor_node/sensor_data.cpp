@@ -7,7 +7,7 @@ void construct_DHT20_Frame(uint16_t temp, uint16_t humi) {
     // Serial.println(String(temp));
 
     Serial.write('!');
-    strcpy(dht20_data.sensorId, "dht20");
+    strcpy(dht20_data.sensorId, "dht");
     snprintf(dht20_data.temp, sizeof(dht20_data.temp), "%u", temp);
     snprintf(dht20_data.humi, sizeof(dht20_data.humi), "%u", humi);
     strcpy(dht20_data.crc, "");

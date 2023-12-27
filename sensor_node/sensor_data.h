@@ -7,7 +7,7 @@
 #define LIGHT_TASK_SEND_TIME 20000
 #define SOIL_MOISTURE_TASK_SEND_TIME 30000
 
-#define DHTPIN 2
+// #define DHTPIN 2
 
 struct dht20
 {
