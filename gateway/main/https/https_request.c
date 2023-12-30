@@ -11,14 +11,16 @@ static const char *TAG = "example";
 /* Timer interval once every day (24 Hours) */
 #define TIME_PERIOD (86400000000ULL)
 
+#define WEB_PATH "/"
+
 static const char GET_REQUEST[] = "GET " GET_WEB_URL_DHT20 " HTTP/1.1\r\n"
                              "Host: "WEB_SERVER"\r\n"
                              "User-Agent: esp-idf/1.0 esp32\r\n"
                              "\r\n";
 
-static const char *PATCH_DATA_DHT20 = "{\"temperature\": %.6f, \"humidity\": %.6f}";
-static const char *PATCH_DATA_LIGHT = "{\"light\": %.6f}";
-static const char *PATCH_DATA_SOIL_MOIS = "{\"soil_moisture\": %.6f}";
+static const char *PATCH_DATA_DHT20 = "{\"nodeID\": %d, \"temperature\": %d, \"humidity\": %d}";
+static const char *PATCH_DATA_LIGHT = "{\"nodeID\": %d, \"light\": %d}";
+static const char *PATCH_DATA_SOIL_MOIS = "{\"nodeID\": %d, \"soil_moisture\": %d}";
 
 static char *PATCH_REQUEST_DHT20 =
                     "PATCH " WEB_URL_DHT20 " HTTP/1.1\r\n"
@@ -53,7 +55,7 @@ static const char LOCAL_SRV_REQUEST[] = "GET " CONFIG_EXAMPLE_LOCAL_SERVER_URL "
                              "\r\n";
 #endif
 
-static char patchPayload[128];
+static char patchPayload[256];
 
 /* Root cert for howsmyssl.com, taken from server_root_cert.pem
 
@@ -76,6 +78,39 @@ static esp_tls_client_session_t *tls_client_session = NULL;
 static bool save_client_session = false;
 #endif
 
+static void turn_led_red_on() {
+    ESP_LOGE(TAG, "Led red");
+    gpio_set_level(LED_RED_PIN, 0);
+
+    gpio_set_level(LED_GREEN_PIN, 1);
+    gpio_set_level(LED_YELLOW_PIN, 1);
+}
+
+static void turn_off_led() {
+    ESP_LOGE(TAG, "Led off");
+    gpio_set_level(LED_RED_PIN, 1);
+
+    gpio_set_level(LED_GREEN_PIN, 1);
+    gpio_set_level(LED_YELLOW_PIN, 1);
+}
+
+static void turn_led_green_on() {
+        ESP_LOGE(TAG, "Led green");
+
+    gpio_set_level(LED_GREEN_PIN, 0);
+
+    gpio_set_level(LED_YELLOW_PIN, 1);
+    gpio_set_level(LED_RED_PIN, 1);
+}
+
+static void turn_led_yellow_on() {
+        ESP_LOGE(TAG, "Led yellow");
+
+    gpio_set_level(LED_YELLOW_PIN, 0);
+
+    gpio_set_level(LED_GREEN_PIN, 1);
+    gpio_set_level(LED_RED_PIN, 1);
+}
 static void https_get_request(esp_tls_cfg_t cfg, const char *WEB_SERVER_URL, const char *REQUEST)
 {
     while(1) {
@@ -126,7 +161,7 @@ static void https_get_request(esp_tls_cfg_t cfg, const char *WEB_SERVER_URL, con
         len = sizeof(buf) - 1;
         memset(buf, 0x00, sizeof(buf));
         ret = esp_tls_conn_read(tls, (char *)buf, len);
-        ESP_LOGI(TAG, "len of response: %d", len);
+        ESP_LOGI(TAG, "len of response: %d", len);  
 
         if (ret == ESP_TLS_ERR_SSL_WANT_WRITE  || ret == ESP_TLS_ERR_SSL_WANT_READ) {
             continue;
@@ -139,12 +174,48 @@ static void https_get_request(esp_tls_cfg_t cfg, const char *WEB_SERVER_URL, con
         }
 
         len = ret;
-        ESP_LOGD(TAG, "%d bytes read", len);
-        /* Print response directly to stdout as it is read */
-        for (int i = 0; i < len; i++) {
-            putchar(buf[i]);
+        ESP_LOGE(TAG, "%d bytes read", len);
+        ESP_LOGE(TAG, "%s buf", buf);
+
+        char *body_start = strstr(buf, "\r\n\r\n");
+
+        char *body_len_char = strstr(buf, "\r\n\r\n");
+
+        char body[1024];
+
+        if (body_start != NULL)
+        {
+            // Move the pointer to the beginning of the body
+            body_start += 7; // Length of "\r\n\r\n"
+            body_len_char += 4;
+            // Calculate the length of the body
+            size_t body_len = len - (body_start - buf);
+
+            // Store the body in a separate array
+            snprintf(body, sizeof(body), "%.*s", body_len, body_start);
+            // Process the body as needed
+
+            ESP_LOGI(TAG, "Body: %s", body);
         }
-        putchar('\n'); // JSON output doesn't have a newline at end
+        else
+        {
+            ESP_LOGE(TAG, "Body not found in the response");
+        }
+
+
+        // Now, you can safely use the body variable outside the if block
+        if (body[0] == 'h' && body[1] == 'e') {
+            // green
+            turn_led_green_on();
+        } else if (body[0] == 'E' && body[1] == 'a') {
+
+            // yellow
+            turn_led_yellow_on();
+        } else if (body[0] == '\0') turn_off_led();
+        else {
+            // red
+            turn_led_red_on();
+        }
 
         cleanup:
             esp_tls_conn_destroy(tls);
@@ -154,7 +225,7 @@ static void https_get_request(esp_tls_cfg_t cfg, const char *WEB_SERVER_URL, con
             //     vTaskDelay(1000 / portTICK_PERIOD_MS);
             // }
 
-        vTaskDelay(1000 / portTICK_PERIOD_MS);
+        vTaskDelay(10000 / portTICK_PERIOD_MS);
     }
 }
 
@@ -168,9 +239,10 @@ static void https_patch_request(esp_tls_cfg_t cfg, const char *WEB_SERVER_URL, c
 
         ESP_LOGI(TAG, "Received Data Frame:");
 
-        if (data[0] == (char)'d') {
+        if (data[3] == (char)'d') {
             DHT20_Data *receivedFrame = (DHT20_Data *)(data); 
 
+            ESP_LOGI(TAG, "Node ID: %s", receivedFrame->nodeId);
             ESP_LOGI(TAG, "Sensor ID: %s", receivedFrame->sensorId);
             ESP_LOGI(TAG, "Sensor temp: %s", receivedFrame->temp);
             ESP_LOGI(TAG, "Sensor humi: %s", receivedFrame->humi);
@@ -178,8 +250,8 @@ static void https_patch_request(esp_tls_cfg_t cfg, const char *WEB_SERVER_URL, c
 
             if (strcmp(receivedFrame->sensorId, SENSOR_DHT20) == 0) 
             {
-                snprintf(patchPayload, sizeof(patchPayload), PATCH_DATA_DHT20,
-                    atof(receivedFrame->temp), atof(receivedFrame->humi) ); 
+                snprintf(patchPayload, sizeof(patchPayload), PATCH_DATA_DHT20, atoi(receivedFrame->nodeId),
+                    atoi(receivedFrame->temp), atoi(receivedFrame->humi) ); 
                 
                 content_length = strlen(patchPayload);
                 snprintf(patch_request, sizeof(patch_request), PATCH_REQUEST_DHT20, content_length, patchPayload);
@@ -189,14 +261,15 @@ static void https_patch_request(esp_tls_cfg_t cfg, const char *WEB_SERVER_URL, c
         else {
             Others_Data *receivedFrame = (Others_Data *)(data);  
 
+            ESP_LOGI(TAG, "Node ID: %s", receivedFrame->nodeId);
             ESP_LOGI(TAG, "Sensor ID: %s", receivedFrame->sensorId);
             ESP_LOGI(TAG, "Sensor Data: %s", receivedFrame->sensorData);
             ESP_LOGI(TAG, "CRC: %s", receivedFrame->crc);
 
             if (strcmp(receivedFrame->sensorId, SENSOR_LIGHT) == 0) 
             {
-                snprintf(patchPayload, sizeof(patchPayload), PATCH_DATA_LIGHT,
-                    atof(receivedFrame->sensorData)); 
+                snprintf(patchPayload, sizeof(patchPayload), PATCH_DATA_LIGHT, atoi(receivedFrame->nodeId),
+                    atoi(receivedFrame->sensorData)); 
 
                 content_length = strlen(patchPayload);
                 snprintf(patch_request, sizeof(patch_request), PATCH_REQUEST_LIGHT_SENSOR, content_length, patchPayload);
@@ -204,8 +277,8 @@ static void https_patch_request(esp_tls_cfg_t cfg, const char *WEB_SERVER_URL, c
             } 
             else if (strcmp(receivedFrame->sensorId, SENSOR_SOIL_MOISTURE) == 0) 
             {            
-                snprintf(patchPayload, sizeof(patchPayload), PATCH_DATA_SOIL_MOIS,
-                    atof(receivedFrame->sensorData)); 
+                snprintf(patchPayload, sizeof(patchPayload), PATCH_DATA_SOIL_MOIS, atoi(receivedFrame->nodeId),
+                    atoi(receivedFrame->sensorData)); 
 
                 content_length = strlen(patchPayload);
                 snprintf(patch_request, sizeof(patch_request), PATCH_REQUEST_SOIL_MOIS_SENSOR, content_length, patchPayload);
@@ -271,49 +344,51 @@ static void https_patch_request(esp_tls_cfg_t cfg, const char *WEB_SERVER_URL, c
             }
         } while (written_bytes < strlen(patch_request));
 
-        goto cleanup;
+        // goto cleanup;
         
         /* Reading http response */
-        ESP_LOGI(TAG, "Reading HTTP response...");
+        // ESP_LOGI(TAG, "Reading HTTP response...");
 
-        len = sizeof(buf) - 1;
-        memset(buf, 0x00, sizeof(buf));
-        ret = esp_tls_conn_read(tls, (char *)buf, len);
+        // len = sizeof(buf) - 1;
+        // memset(buf, 0x00, sizeof(buf));
+        // ret = esp_tls_conn_read(tls, (char *)buf, len);
 
-        if (ret == ESP_TLS_ERR_SSL_WANT_WRITE || ret == ESP_TLS_ERR_SSL_WANT_READ)
-        {
-            free(patch_request);  // Free allocated memory
-            continue;
-        }
-        else if (ret < 0)
-        {
-            ESP_LOGE(TAG, "esp_tls_conn_read  returned [-0x%02X](%s)", -ret, esp_err_to_name(ret));
-            free(patch_request);  // Free allocated memory
-            break;
-        }
-        else if (ret == 0)
-        {
-            ESP_LOGI(TAG, "connection closed");
-            free(patch_request);  // Free allocated memory
-            break;
-        }
+        // if (ret == ESP_TLS_ERR_SSL_WANT_WRITE || ret == ESP_TLS_ERR_SSL_WANT_READ)
+        // {
+        //     free(patch_request);  // Free allocated memory
+        //     continue;
+        // }
+        // else if (ret < 0)
+        // {
+        //     ESP_LOGE(TAG, "esp_tls_conn_read  returned [-0x%02X](%s)", -ret, esp_err_to_name(ret));
+        //     free(patch_request);  // Free allocated memory
+        //     break;
+        // }
+        // else if (ret == 0)
+        // {
+        //     ESP_LOGI(TAG, "connection closed");
+        //     free(patch_request);  // Free allocated memory
+        //     break;
+        // }
 
-        len = ret;
-        ESP_LOGD(TAG, "%d bytes read", len);
-        /* Print response directly to stdout as it is read */
-        for (int i = 0; i < len; i++)
-        {
-            putchar(buf[i]);
-        }
-        putchar('\n'); // JSON output doesn't have a newline at the end
+        // len = ret;
+        // ESP_LOGD(TAG, "%d bytes read", len);
+        // /* Print response directly to stdout as it is read */
+        // for (int i = 0; i < len; i++)
+        // {
+        //     putchar(buf[i]);
+        // }
+        // putchar('\n'); // JSON output doesn't have a newline at the end
 
     cleanup:
         // free(patch_request);  // Free allocated memory
         esp_tls_conn_destroy(tls);
         xTaskNotifyGive(rx_task_handler);
+        vTaskDelay(100);
         break;
     exit:
         xTaskNotifyGive(rx_task_handler);
+        vTaskDelay(100);
     }
 }
 

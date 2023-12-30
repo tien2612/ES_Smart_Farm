@@ -56,27 +56,103 @@ static const int RX_BUF_SIZE = 1024;
 #define TXD_PIN (GPIO_NUM_17)
 #define RXD_PIN (GPIO_NUM_16)
 #define START_MARKER '!'
+#define END_MARKER '#'
+
+#define ECHO_TEST_TXD   (CONFIG_ECHO_UART_TXD)
+#define ECHO_TEST_RXD   (CONFIG_ECHO_UART_RXD)
+
+// RTS for RS485 Half-Duplex Mode manages DE/~RE
+#define ECHO_TEST_RTS   (CONFIG_ECHO_UART_RTS)
+
+// CTS is not used in RS485 Half-Duplex Mode
+#define ECHO_TEST_CTS   (UART_PIN_NO_CHANGE)
+
+#define BUF_SIZE        (127)
+#define BAUD_RATE       (CONFIG_ECHO_UART_BAUD_RATE)
+
+// Read packet timeout
+#define PACKET_READ_TICS        (100 / portTICK_PERIOD_MS)
+#define ECHO_TASK_STACK_SIZE    (2048)
+#define ECHO_TASK_PRIO          (10)
+#define ECHO_UART_PORT          (CONFIG_ECHO_UART_PORT_NUM)
+
+// Timeout threshold for UART = number of symbols (~10 tics) with unchanged state on receive pin
+#define ECHO_READ_TOUT          (3) // 3.5T * 8 = 28 ticks, TOUT=3 -> ~24..33 ticks
 
 // typedef struct {
 //     char sensorData[3];
 //     char crc[3];
 //     char sensorId[20];
 // } DataFrame;
+#define uart_num ECHO_UART_PORT
+
+static void configure_led(void)
+{
+    ESP_LOGI(TAG, "Config led!");
+    gpio_reset_pin(LED_RED_PIN);
+    /* Set the GPIO as a push/pull output */
+    gpio_set_direction(LED_RED_PIN, GPIO_MODE_OUTPUT);
+
+    gpio_reset_pin(LED_YELLOW_PIN);
+    /* Set the GPIO as a push/pull output */
+    gpio_set_direction(LED_YELLOW_PIN, GPIO_MODE_OUTPUT);
+
+        gpio_reset_pin(LED_GREEN_PIN);
+    /* Set the GPIO as a push/pull output */
+    gpio_set_direction(LED_GREEN_PIN, GPIO_MODE_OUTPUT);
+}
 
 void init(void)
 {
-    const uart_config_t uart_config = {
-        .baud_rate = 115200,
+    // const uart_config_t uart_config = {
+    //     .baud_rate = 115200,
+    //     .data_bits = UART_DATA_8_BITS,
+    //     .parity = UART_PARITY_DISABLE,
+    //     .stop_bits = UART_STOP_BITS_1,
+    //     .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
+    //     .source_clk = UART_SCLK_DEFAULT,
+    // };
+    // // We won't use a buffer for sending data.
+    // uart_driver_install(UART_NUM_1, RX_BUF_SIZE * 2, 0, 0, NULL, 0);
+    // uart_param_config(UART_NUM_1, &uart_config);
+    // uart_set_pin(UART_NUM_1, TXD_PIN, RXD_PIN, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
+    uart_config_t uart_config = {
+        .baud_rate = BAUD_RATE,
         .data_bits = UART_DATA_8_BITS,
         .parity = UART_PARITY_DISABLE,
         .stop_bits = UART_STOP_BITS_1,
         .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
+        .rx_flow_ctrl_thresh = 122,
         .source_clk = UART_SCLK_DEFAULT,
     };
-    // We won't use a buffer for sending data.
-    uart_driver_install(UART_NUM_1, RX_BUF_SIZE * 2, 0, 0, NULL, 0);
-    uart_param_config(UART_NUM_1, &uart_config);
-    uart_set_pin(UART_NUM_1, TXD_PIN, RXD_PIN, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
+
+    // Set UART log level
+    esp_log_level_set(TAG, ESP_LOG_INFO);
+
+    ESP_LOGI(TAG, "Start RS485 application test and configure UART.");
+
+    // Install UART driver (we don't need an event queue here)
+    // In this example we don't even use a buffer for sending data.
+    ESP_ERROR_CHECK(uart_driver_install(uart_num, BUF_SIZE * 2, 0, 0, NULL, 0));
+
+    // Configure UART parameters
+    ESP_ERROR_CHECK(uart_param_config(uart_num, &uart_config));
+
+    ESP_LOGI(TAG, "UART set pins, mode and install driver.");
+
+    // Set UART pins as per KConfig settings
+    ESP_ERROR_CHECK(uart_set_pin(uart_num, ECHO_TEST_TXD, ECHO_TEST_RXD, ECHO_TEST_RTS, ECHO_TEST_CTS));
+
+    // Set RS485 half duplex mode
+    ESP_ERROR_CHECK(uart_set_mode(uart_num, UART_MODE_RS485_HALF_DUPLEX));
+
+    // Set read timeout of UART TOUT feature
+    ESP_ERROR_CHECK(uart_set_rx_timeout(uart_num, ECHO_READ_TOUT));
+
+    // Allocate buffers for UART
+    uint8_t* data = (uint8_t*) malloc(BUF_SIZE);
+
+    ESP_LOGI(TAG, "UART start recieve loop.\r\n");
 }
 
 int sendData(const char* logName, const char* data)
@@ -99,14 +175,8 @@ static void tx_task(void *arg)
 
 void receiveDataFrame(uint8_t *data)
 {
-    char startMarker = START_MARKER;
     ESP_LOGE(TAG, "START_MARKER: %d", data[1]);
 
-    // DataFrame *receivedFrame = (DataFrame *)(data);  // Skip the start marker
-    // ESP_LOGI(TAG, "Received Data Frame:");
-    // ESP_LOGI(TAG, "Sensor ID: %s", receivedFrame->sensorId);
-    // ESP_LOGI(TAG, "Sensor Data: %s", receivedFrame->sensorData);
-    // ESP_LOGI(TAG, "CRC: %s", receivedFrame->crc);
     ESP_LOGI(TAG, "Call patch request");
     
     https_patch_task(data);
@@ -115,55 +185,6 @@ void receiveDataFrame(uint8_t *data)
     
 }
 
-// static void rx_task(void *arg)
-// {
-//     static const char *RX_TASK_TAG = "RX_TASK";
-
-//     ESP_LOGI(RX_TASK_TAG, "Task rx");
-
-//     esp_log_level_set(RX_TASK_TAG, ESP_LOG_INFO);
-//     uint8_t* data = (uint8_t*) malloc(RX_BUF_SIZE + 1);
-//     int dataIdx = 0;
-//     bool frameStartDetected = false;
-
-//     while (1) {
-//         const int rxBytes = uart_read_bytes(UART_NUM_1, data + dataIdx, RX_BUF_SIZE - dataIdx, 1000 / portTICK_PERIOD_MS);
-
-//         if (rxBytes > 0) {
-//             for (int i = 0; i < rxBytes; ++i) {
-//                 ESP_LOGI(RX_TASK_TAG, "data: %c", data[dataIdx + i]);
-
-//                 if (data[dataIdx + i] == (char)START_MARKER) {
-
-//                     // Found the start marker, reset the data index
-//                     dataIdx = 0;
-//                     frameStartDetected = true;
-//                 }
-//             }
-
-//             if (frameStartDetected) {
-//                 dataIdx += rxBytes;
-//                 if (dataIdx >= sizeof(DataFrame) + 1) {
-//                     // Full frame received, process it
-//                     data[dataIdx] = 0;
-//                     receiveDataFrame(data + 1);  // Skip the start marker
-//                     ESP_LOGI(RX_TASK_TAG, "Read %d bytes: '%s'", dataIdx, data + 1);
-//                     ESP_LOG_BUFFER_HEXDUMP(RX_TASK_TAG, data + 1, dataIdx - 1, ESP_LOG_INFO);
-//                     dataIdx = 0;
-//                     frameStartDetected = false;
-//                 }
-//             } else {
-//                 // No start marker detected, discard the data
-//                 dataIdx = 0;
-//             }
-//         } else {
-//             ESP_LOGI(RX_TASK_TAG, "No data");
-//         }
-//     }
-//     free(data);
-// }
-
-
 static void rx_task(void *arg)
 {
     static const char *RX_TASK_TAG = "RX_TASK";
@@ -171,22 +192,24 @@ static void rx_task(void *arg)
     ESP_LOGI(RX_TASK_TAG, "Task rx");
 
     esp_log_level_set(RX_TASK_TAG, ESP_LOG_INFO);
-    uint8_t* data = (uint8_t*) malloc(RX_BUF_SIZE + 1);
+    uint8_t* data = (uint8_t*)malloc(RX_BUF_SIZE + 1);
     int dataIdx = 0;
 
-    const char END_MARKER = '#';
-
     while (1) {
-        uint8_t startByte;
-        const int rxBytesStartMarker = uart_read_bytes(UART_NUM_1, &startByte, 1, 1000 / portTICK_PERIOD_MS);
-
-        if (rxBytesStartMarker > 0 && startByte == START_MARKER) {
+        uint8_t receivedByte;
+        int len = uart_read_bytes(uart_num, &receivedByte, 1, PACKET_READ_TICS);
+        
+        if (len > 0 && receivedByte == START_MARKER) {
             ESP_LOG_BUFFER_HEXDUMP(RX_TASK_TAG, data, 28, ESP_LOG_INFO);
+            ESP_LOGI(RX_TASK_TAG, "start market found %c", (char)receivedByte);
 
             // Start marker found, proceed to read until the end marker
             int dataIdx = 0;
             while (1) {
-                const int rxBytes = uart_read_bytes(UART_NUM_1, data + dataIdx, 1, 1000 / portTICK_PERIOD_MS);
+                const int rxBytes = uart_read_bytes(uart_num, data + dataIdx, 1, PACKET_READ_TICS);
+                
+                ESP_LOGI(RX_TASK_TAG, "data en, len %d, char %c", rxBytes, (char)data[dataIdx] );
+
                 if (rxBytes > 0) {
                     if (data[dataIdx] == END_MARKER) {
                         // End marker found, break out of the loop
@@ -213,12 +236,13 @@ static void rx_task(void *arg)
             ESP_LOGI(RX_TASK_TAG, "Read %d bytes", dataIdx);
         } else {
             // Start marker not found, handle accordingly
-            ESP_LOGI(RX_TASK_TAG, "Start marker not found");
+            // ESP_LOGI(RX_TASK_TAG, "Start marker not found, len %d, char %c", len, (char)receivedByte);
             vTaskDelay(100 / portTICK_PERIOD_MS);  // Add a delay or handle the situation based on your requirements
         }
     }
     free(data);
 }
+
 
 void app_main(void)
 {
@@ -232,18 +256,16 @@ void app_main(void)
 
     wifi_init_sta();
 
-    // xTaskCreate(&https_request_task, "https_get_task", 8192, NULL, 5, &get_task_handler);
-    // xTaskCreate(&https_patch_task, "https_patch_task", 8192, NULL, 5, &patch_task_handler);
-    ESP_LOGE(TAG, "After!");
+    // init rs485
     init();
-    ESP_LOGE(TAG, "Before!");
 
-
+    // config led
+    configure_led();
     BaseType_t taskCreationResult = xTaskCreate(rx_task, "uart_rx_task", 8192, NULL, configMAX_PRIORITIES - 1, &rx_task_handler);
     if (taskCreationResult != pdPASS) {
         ESP_LOGE(TAG, "Failed to create rx_task!");
     }
     else ESP_LOGE(TAG, "success to create rx_task!");
     
-    // xTaskCreate(tx_task, "uart_tx_task", 1024 * 2, NULL, configMAX_PRIORITIES - 2, NULL);
+    xTaskCreate(https_request_task, "https_request_task", 8192, NULL, configMAX_PRIORITIES - 2, NULL);
 }
